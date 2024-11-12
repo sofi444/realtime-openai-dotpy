@@ -6,6 +6,7 @@ import wave
 import base64
 import logging
 import os
+import ssl
 import threading
 
 from dotenv import load_dotenv
@@ -39,6 +40,9 @@ class RealtimeClient:
         self.p = pyaudio.PyAudio()
         self.stream = None
         self.audio_buffer = b''
+        self.ssl_context = ssl.create_default_context()
+        self.ssl_context.check_hostname = False
+        self.ssl_context.verify_mode = ssl.CERT_NONE
 
     async def connect(self):
         logger.info(f"Connecting to WebSocket: {WS_URL}")
@@ -51,11 +55,18 @@ class RealtimeClient:
         ws_version = tuple(int(x) for x in websockets.__version__.split("."))
         if ws_version < (11, 0):
             # For versions < 11.0, use extra_headers
-            self.ws = await websockets.connect(f"{WS_URL}?model={MODEL}", extra_headers=headers)
+            self.ws = await websockets.connect(
+                f"{WS_URL}?model={MODEL}", 
+                extra_headers=headers, 
+                ssl=self.ssl_context
+            )
         else:
             # For versions >= 11.0, use headers
-            self.ws = await websockets.connect(f"{WS_URL}?model={MODEL}", heaaders=headers)
-
+            self.ws = await websockets.connect(
+                f"{WS_URL}?model={MODEL}", 
+                headers=headers, 
+                ssl=self.ssl_context
+            )
         logger.info("Successfully connected to OpenAI Realtime API")
 
     async def send_event(self, event):
@@ -176,6 +187,8 @@ class RealtimeClient:
 
     async def run(self):
         await self.connect()
+        
+        # Continuously listen to events in the background
         receive_task = asyncio.create_task(self.receive_events())
         
         try:
