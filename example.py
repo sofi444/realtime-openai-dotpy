@@ -29,21 +29,62 @@ MODEL = "gpt-4o-realtime-preview"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 """
-This important message is lost with all log information:
-Enter 't' for text, 'a' for audio, or 'q' to quit:
+Enter 't' for text, 'a' for audio, or 'q' to quit
 """
 
-class RealtimeClient:
+class AudioHandler:
     def __init__(self):
-        logger.info("Initializing RealtimeClient")
-        self.ws = None
         self.p = pyaudio.PyAudio()
         self.stream = None
         self.audio_buffer = b''
+
+    def start_audio_stream(self):
+        self.stream = self.p.open(format=FORMAT,
+                                channels=CHANNELS,
+                                rate=RATE,
+                                input=True,
+                                frames_per_buffer=CHUNK)
+
+    def stop_audio_stream(self):
+        if self.stream:
+            self.stream.stop_stream()
+            self.stream.close()
+
+    def record_audio(self, duration):
+        frames = []
+        for i in range(0, int(RATE / CHUNK * duration)):
+            data = self.stream.read(CHUNK)
+            frames.append(data)
+        return b''.join(frames)
+
+    def play_audio(self, audio_data):
+        def play():
+            stream = self.p.open(format=FORMAT,
+                                channels=CHANNELS,
+                                rate=RATE,
+                                output=True)
+            stream.write(audio_data)
+            stream.stop_stream()
+            stream.close()
+
+        playback_thread = threading.Thread(target=play)
+        playback_thread.start()
+
+    def cleanup(self):
+        if self.stream:
+            self.stop_audio_stream()
+        self.p.terminate()
+
+
+class RealtimeClient:
+    def __init__(self):
+        self.ws = None
+        self.audio_handler = AudioHandler()
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
-
+        self.audio_buffer = b''  # Handling streaming audio responses in client
+ 
     async def connect(self):
         logger.info(f"Connecting to WebSocket: {WS_URL}")
         headers = {
@@ -87,23 +128,17 @@ class RealtimeClient:
 
     async def handle_event(self, event):
         event_type = event.get("type")
-        logger.info(f"Handling event of type: {event_type}")
 
         if event_type == "error":
             logger.error(f"Error event received: {event['error']['message']}")
         elif event_type == "response.text.delta":
-            logger.debug(f"Text delta received: {event['delta']}")
             print(event["delta"], end="", flush=True)
         elif event_type == "response.audio.delta":
-            logger.debug(f"Audio delta received, length: {len(event['delta'])}")
             audio_data = base64.b64decode(event["delta"])
             self.audio_buffer += audio_data
         elif event_type == "response.audio.done":
-            logger.info("Audio response complete, playing audio")
-            self.play_audio(self.audio_buffer)
+            self.audio_handler.play_audio(self.audio_buffer)
             self.audio_buffer = b''
-        else:
-            logger.info(f"Received other event type: {event_type}")
 
     def start_audio_stream(self):
         logger.info("Starting audio input stream")
@@ -167,22 +202,17 @@ class RealtimeClient:
         await self.send_event({"type": "response.create"})
 
     async def send_audio(self, duration):
-        logger.info(f"Preparing to send audio of duration: {duration} seconds")
-        self.start_audio_stream()
-        audio_data = self.record_audio(duration)
-        self.stop_audio_stream()
+        self.audio_handler.start_audio_stream()
+        audio_data = self.audio_handler.record_audio(duration)
+        self.audio_handler.stop_audio_stream()
 
         base64_audio = base64.b64encode(audio_data).decode('utf-8')
-        logger.debug(f"Audio encoded to base64, length: {len(base64_audio)}")
         
-        event = {
+        await self.send_event({
             "type": "input_audio_buffer.append",
             "audio": base64_audio
-        }
-        await self.send_event(event)
-        logger.debug("Audio buffer appended, committing buffer")
+        })
         await self.send_event({"type": "input_audio_buffer.commit"})
-        logger.debug("Audio buffer committed, creating response")
         await self.send_event({"type": "response.create"})
 
     async def run(self):
@@ -210,12 +240,9 @@ class RealtimeClient:
             await self.cleanup()
 
     async def cleanup(self):
-        logger.info("Cleaning up resources")
-        if self.stream:
-            self.stop_audio_stream()
+        self.audio_handler.cleanup()
         if self.ws:
             await self.ws.close()
-
 
 async def main():
     logger.info("Starting main function")
@@ -228,6 +255,4 @@ async def main():
         logger.info("Main function completed")
 
 if __name__ == "__main__":
-    logger.info("Script started")
     asyncio.run(main())
-    logger.info("Script completed")
