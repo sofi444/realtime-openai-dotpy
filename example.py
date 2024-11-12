@@ -95,7 +95,7 @@ class RealtimeClient:
     """
     Client for interacting with the OpenAI Realtime API via WebSocket.
     """
-    def __init__(self):
+    def __init__(self, instructions, voice="alloy"):
         # WebSocket Configuration
         self.url = "wss://api.openai.com/v1/realtime"  # WebSocket URL for OpenAI API
         self.model = "gpt-4o-realtime-preview"  # Model identifier
@@ -106,6 +106,8 @@ class RealtimeClient:
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
         self.audio_buffer = b''  # Buffer for streaming audio responses
+        self.instructions = instructions
+        self.voice = voice
 
     async def connect(self):
         """
@@ -125,13 +127,30 @@ class RealtimeClient:
         )
         logger.info("Successfully connected to OpenAI Realtime API")
 
+        # Set up session configuration
+        await self.update_session({
+            "modalities": ["audio", "text"],
+            "instructions": self.instructions,
+            "voice": self.voice,
+        })
+
+    async def update_session(self, config):
+        """
+        Update the session configuration.
+        """
+        event = {
+            "type": "session.update",
+            "session": config
+        }
+        await self.send_event(event)
+
     async def send_event(self, event):
         """
         Send an event to the WebSocket server.
         
         :param event: Event data to send.
         """
-        logger.debug(f"Sending event: {event}")
+        logger.debug(f"Sending event type: {event['type']}")
         await self.ws.send(json.dumps(event))
         logger.debug("Event sent successfully")
 
@@ -141,7 +160,6 @@ class RealtimeClient:
         """
         try:
             async for message in self.ws:
-                logger.debug(f"Received raw message: {message}")
                 event = json.loads(message)
                 await self.handle_event(event)
         except websockets.ConnectionClosed as e:
@@ -156,6 +174,7 @@ class RealtimeClient:
         :param event: Event data received.
         """
         event_type = event.get("type")
+        logger.debug(f"Received event type: {event_type}")
 
         if event_type == "error":
             logger.error(f"Error event received: {event['error']['message']}")
@@ -166,10 +185,15 @@ class RealtimeClient:
             # Append audio data to buffer
             audio_data = base64.b64decode(event["delta"])
             self.audio_buffer += audio_data
+            logger.debug("Audio data appended to buffer")
         elif event_type == "response.audio.done":
             # Play the complete audio response
-            self.audio_handler.play_audio(self.audio_buffer)
-            self.audio_buffer = b''
+            if self.audio_buffer:
+                self.audio_handler.play_audio(self.audio_buffer)
+                logger.info("Playing audio response")
+                self.audio_buffer = b''
+            else:
+                logger.warning("No audio data to play")
 
     async def send_text(self, text):
         """
@@ -222,6 +246,9 @@ class RealtimeClient:
         # Continuously listen to events in the background
         receive_task = asyncio.create_task(self.receive_events())
         
+        # Fake first user message (not played)
+        await self.send_text("Start.")
+
         try:
             while True:
                 # Get user command input
@@ -252,7 +279,10 @@ class RealtimeClient:
             await self.ws.close()
 
 async def main():
-    client = RealtimeClient()
+    client = RealtimeClient(
+        instructions="You are a happy old granny. When the user says 'Start.', you start the conversation.",
+        voice="alloy"
+    )
     try:
         await client.run()
     except Exception as e:
