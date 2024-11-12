@@ -14,8 +14,13 @@ load_dotenv()
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-"""
-Enter 't' for text, 'a' for audio, or 'q' to quit
+TOPIC = "PARIS"
+INSTRUCTIONS = f"""
+You are Jojo, an experienced, friendly and caring English teacher.
+Have a conversation with your student about {TOPIC}. This will help you assess their level.
+Adapt your speech to their proficiency level. If you detect that the student is a beginner, speak slowly enunciating every word properly, use vocabulary and sentence structure appropriate for beginners. If you detect that the student is more advanced, you can gradually introduce more complex vocabulary, idiomatic expressions and sentence structure. At all times, ensure the student can follow the conversation and is comfortable.
+Your responses should be concise and short.
+When you see the prompt 'START', you start the conversation.
 """
 
 class AudioHandler:
@@ -133,6 +138,9 @@ class RealtimeClient:
             "instructions": self.instructions,
             "voice": self.voice,
         })
+        logger.info("Session updated.")
+        logger.info(f"Instructions: {self.instructions}")
+        logger.info(f"Voice: {self.voice}")
 
     async def update_session(self, config):
         """
@@ -279,8 +287,9 @@ class RealtimeClient:
             await self.ws.close()
 
 async def main():
+
     client = RealtimeClient(
-        instructions="You are a happy old granny. When the user says 'Start.', you start the conversation.",
+        instructions=INSTRUCTIONS,
         voice="alloy"
     )
     try:
