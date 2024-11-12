@@ -117,22 +117,12 @@ class RealtimeClient:
             "OpenAI-Beta": "realtime=v1"
         }
         
-        # Check for websockets version and adjust connection method
-        ws_version = tuple(int(x) for x in websockets.__version__.split("."))
-        if ws_version < (11, 0):
-            # For versions < 11.0, use extra_headers
-            self.ws = await websockets.connect(
-                f"{self.url}?model={self.model}", 
-                extra_headers=headers, 
-                ssl=self.ssl_context
-            )
-        else:
-            # For versions >= 11.0, use headers
-            self.ws = await websockets.connect(
-                f"{self.url}?model={self.model}", 
-                headers=headers, 
-                ssl=self.ssl_context
-            )
+        # NEEDS websockets version < 11.0
+        self.ws = await websockets.connect(
+            f"{self.url}?model={self.model}",
+            extra_headers=headers,
+            ssl=self.ssl_context
+        )
         logger.info("Successfully connected to OpenAI Realtime API")
 
     async def send_event(self, event):

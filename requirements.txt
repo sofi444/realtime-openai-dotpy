@@ -1,0 +1,3 @@
+python-dotenv
+websockets==10.4
+pyaudio
