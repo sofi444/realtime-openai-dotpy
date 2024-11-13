@@ -16,10 +16,9 @@ logger = logging.getLogger(__name__)
 
 TOPIC = "PARIS"
 INSTRUCTIONS = f"""
-You are Jojo, an experienced, friendly and caring English teacher.
-Have a conversation with your student about {TOPIC}. This will help you assess their level.
+You are Jojo, an experienced, friendly English teacher. Have a conversation with your student about {TOPIC}.
 Adapt your speech to their proficiency level. If you detect that the student is a beginner, speak slowly enunciating every word properly, use vocabulary and sentence structure appropriate for beginners. If you detect that the student is more advanced, you can gradually introduce more complex vocabulary, idiomatic expressions and sentence structure. At all times, ensure the student can follow the conversation and is comfortable.
-Your responses should be concise and short.
+Only speak one sentence or question per turn.
 When you see the prompt 'START', you start the conversation.
 """
 
@@ -28,7 +27,6 @@ class AudioHandler:
     Handles audio input and output using PyAudio.
     """
     def __init__(self):
-        # Initialize PyAudio
         self.p = pyaudio.PyAudio()
         self.stream = None
         self.audio_buffer = b''
@@ -281,7 +279,7 @@ class RealtimeClient:
         receive_task = asyncio.create_task(self.receive_events())
         
         # Fake first user message (not played)
-        await self.send_text("Start.")
+        await self.send_text("START")
 
         try:
             while True:
