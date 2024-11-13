@@ -36,6 +36,7 @@ class AudioHandler:
         self.format = pyaudio.paInt16  # Audio format (16-bit PCM)
         self.channels = 1  # Mono audio
         self.rate = 24000  # Sampling rate in Hz
+        self.is_recording = False
 
     def start_audio_stream(self):
         """
@@ -55,19 +56,34 @@ class AudioHandler:
             self.stream.stop_stream()
             self.stream.close()
 
-    def record_audio(self, duration):
+    def cleanup(self):
         """
-        Record audio for a specified duration.
-        
-        :param duration: Duration in seconds to record audio.
-        :return: Recorded audio data as bytes.
+        Clean up resources by stopping the stream and terminating PyAudio.
         """
-        frames = []
-        for i in range(0, int(self.rate / self.chunk_size * duration)):
-            data = self.stream.read(self.chunk_size)
-            frames.append(data)
-        return b''.join(frames)
+        if self.stream:
+            self.stop_audio_stream()
+        self.p.terminate()
 
+    def start_recording(self):
+        """Start continuous recording"""
+        self.is_recording = True
+        self.audio_buffer = b''
+        self.start_audio_stream()
+
+    def stop_recording(self):
+        """Stop recording and return the recorded audio"""
+        self.is_recording = False
+        self.stop_audio_stream()
+        return self.audio_buffer
+
+    def record_chunk(self):
+        """Record a single chunk of audio"""
+        if self.stream and self.is_recording:
+            data = self.stream.read(self.chunk_size)
+            self.audio_buffer += data
+            return data
+        return None
+    
     def play_audio(self, audio_data):
         """
         Play audio data.
@@ -87,14 +103,6 @@ class AudioHandler:
         playback_thread = threading.Thread(target=play)
         playback_thread.start()
 
-    def cleanup(self):
-        """
-        Clean up resources by stopping the stream and terminating PyAudio.
-        """
-        if self.stream:
-            self.stop_audio_stream()
-        self.p.terminate()
-
 
 class RealtimeClient:
     """
@@ -113,6 +121,14 @@ class RealtimeClient:
         self.audio_buffer = b''  # Buffer for streaming audio responses
         self.instructions = instructions
         self.voice = voice
+
+        # VAD mode
+        self.turn_detection_config = {
+            "type": "server_vad",
+            "threshold": 0.5,
+            "prefix_padding_ms": 100,
+            "silence_duration_ms": 600
+        }
 
     async def connect(self):
         """
@@ -137,6 +153,9 @@ class RealtimeClient:
             "modalities": ["audio", "text"],
             "instructions": self.instructions,
             "voice": self.voice,
+            "input_audio_format": "pcm16",
+            "output_audio_format": "pcm16",
+            "turn_detection": self.turn_detection_config
         })
         logger.info("Session updated.")
         logger.info(f"Instructions: {self.instructions}")
@@ -225,23 +244,30 @@ class RealtimeClient:
         logger.debug("Text message sent, creating response")
         await self.send_event({"type": "response.create"})
 
-    async def send_audio(self, duration):
+    async def send_audio(self):
         """
-        Record and send audio to the WebSocket server.
+        Record and send audio using server-side turn detection
+        """
+        self.audio_handler.start_recording()
         
-        :param duration: Duration in seconds to record audio.
-        """
-        self.audio_handler.start_audio_stream()
-        audio_data = self.audio_handler.record_audio(duration)
-        self.audio_handler.stop_audio_stream()
+        try:
+            while True:
+                chunk = self.audio_handler.record_chunk()
+                if chunk:
+                    # Encode and send audio chunk
+                    base64_chunk = base64.b64encode(chunk).decode('utf-8')
+                    await self.send_event({
+                        "type": "input_audio_buffer.append",
+                        "audio": base64_chunk
+                    })
+                    await asyncio.sleep(0.01)
+                else:
+                    break
 
-        # Encode audio data to base64 for transmission
-        base64_audio = base64.b64encode(audio_data).decode('utf-8')
+        except Exception as e:
+            logger.error(f"Error during audio recording: {e}")
+            self.audio_handler.stop_recording()
         
-        await self.send_event({
-            "type": "input_audio_buffer.append",
-            "audio": base64_audio
-        })
         await self.send_event({"type": "input_audio_buffer.commit"})
         await self.send_event({"type": "response.create"})
 
@@ -270,7 +296,7 @@ class RealtimeClient:
                     await self.send_text(text)
                 elif command == 'a':
                     # Record and send audio
-                    await self.send_audio(5)
+                    await self.send_audio()
                 await asyncio.sleep(0.1)
         except Exception as e:
             logger.error(f"An error occurred: {e}")
