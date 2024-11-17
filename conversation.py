@@ -19,6 +19,11 @@ INSTRUCTIONS = f"""
 You are Martin, an experienced, friendly English teacher. Have a conversation with your student about {TOPIC}. You should be the one to start the conversation. When the student responds, you should respond back. Keep your turns extremely concise, no more than 10 words.
 Adapt your speech to the student's proficiency level. If you detect that the student is a beginner, speak slowly, enunciating every word properly, and use vocabulary and sentence structures appropriate for beginners. If you detect that the student is more advanced, you can gradually introduce more complex vocabulary, idiomatic expressions, and sentence structures. At all times, ensure the student can follow the conversation and is comfortable.
 """
+KEYBOARD_COMMANDS = """
+q: Quit
+t: Send text message
+a: Send audio message
+"""
 
 class AudioHandler:
     """
@@ -38,11 +43,13 @@ class AudioHandler:
         """
         Start the audio input stream.
         """
-        self.stream = self.p.open(format=self.format,
-                                  channels=self.channels,
-                                  rate=self.rate,
-                                  input=True,
-                                  frames_per_buffer=self.chunk_size)
+        self.stream = self.p.open(
+            format=self.format,
+            channels=self.channels,
+            rate=self.rate,
+            input=True,
+            frames_per_buffer=self.chunk_size
+        )
 
     def stop_audio_stream(self):
         """
@@ -84,13 +91,15 @@ class AudioHandler:
         """
         Play audio data.
         
-        :param audio_data: Audio data to play.
+        :param audio_data: Received audio data (AI response)
         """
         def play():
-            stream = self.p.open(format=self.format,
-                                 channels=self.channels,
-                                 rate=self.rate,
-                                 output=True)
+            stream = self.p.open(
+                format=self.format,
+                channels=self.channels,
+                rate=self.rate,
+                output=True
+            )
             stream.write(audio_data)
             stream.stop_stream()
             stream.close()
@@ -104,10 +113,12 @@ class AudioHandler:
 class RealtimeClient:
     """
     Client for interacting with the OpenAI Realtime API via WebSocket.
+
+    Possible events: https://platform.openai.com/docs/api-reference/realtime-client-events
     """
     def __init__(self, instructions, voice="alloy"):
         # WebSocket Configuration
-        self.url = "wss://api.openai.com/v1/realtime"  # WebSocket URL for OpenAI API
+        self.url = "wss://api.openai.com/v1/realtime"  # WebSocket URL
         self.model = "gpt-4o-realtime-preview-2024-10-01"
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.ws = None
@@ -131,6 +142,19 @@ class RealtimeClient:
             "silence_duration_ms": 600  # Silence to detect speech stop. With lower values the model will respond more quickly.
         }
 
+        self.session_config = {
+            "modalities": ["audio", "text"],
+            "instructions": self.instructions,
+            "voice": self.voice,
+            "input_audio_format": "pcm16",
+            "output_audio_format": "pcm16",
+            "turn_detection": self.VAD_config if self.VAD_turn_detection else None,
+            "input_audio_transcription": {  # Get transcription of user turns
+                "model": "whisper-1"
+            },
+            "temperature": 0.6
+        }
+
     async def connect(self):
         """
         Connect to the WebSocket server.
@@ -141,7 +165,7 @@ class RealtimeClient:
             "OpenAI-Beta": "realtime=v1"
         }
         
-        # NEEDS websockets version < 11.0
+        # NEEDS websockets version < 14.0
         self.ws = await websockets.connect(
             f"{self.url}?model={self.model}",
             extra_headers=headers,
@@ -149,42 +173,24 @@ class RealtimeClient:
         )
         logger.info("Successfully connected to OpenAI Realtime API")
 
-        # Set up session configuration
-        await self.update_session({
-            "modalities": ["audio", "text"],
-            "instructions": self.instructions,
-            "voice": self.voice,
-            "input_audio_format": "pcm16",
-            "output_audio_format": "pcm16",
-            "turn_detection": self.VAD_config if self.VAD_turn_detection else None,
-            "input_audio_transcription": {
-                "model": "whisper-1"
-            },
-            "temperature": 0.6
-        })
-        logger.info("Session updated.")
-        logger.info(f"Instructions: {self.instructions}")
-        logger.info(f"Voice: {self.voice}")
+        # Configure session
+        await self.send_event(
+            {
+                "type": "session.update",
+                "session": self.session_config
+            }
+        )
+        logger.info("Session set up")
 
         # Send a response.create event to initiate the conversation
         await self.send_event({"type": "response.create"})
         logger.debug("Sent response.create to initiate conversation")
 
-    async def update_session(self, config):
-        """
-        Update the session configuration.
-        """
-        event = {
-            "type": "session.update",
-            "session": config
-        }
-        await self.send_event(event)
-
     async def send_event(self, event):
         """
         Send an event to the WebSocket server.
         
-        :param event: Event data to send.
+        :param event: Event data to send (from the user)
         """
         await self.ws.send(json.dumps(event))
         logger.debug(f"Event sent - type: {event['type']}")
@@ -205,8 +211,9 @@ class RealtimeClient:
     async def handle_event(self, event):
         """
         Handle incoming events from the WebSocket server.
+        Possible events: https://platform.openai.com/docs/api-reference/realtime-server-events
         
-        :param event: Event data received.
+        :param event: Event data received (from the server).
         """
         event_type = event.get("type")
         logger.debug(f"Received event type: {event_type}")
@@ -231,7 +238,6 @@ class RealtimeClient:
                 logger.warning("No audio data to play")
         elif event_type == "response.done":
             logger.debug("Response generation completed")
-            # Handle any cleanup if necessary
         elif event_type == "conversation.item.created":
             logger.debug(f"Conversation item created: {event.get('item')}")
         elif event_type == "input_audio_buffer.speech_started":
@@ -314,13 +320,17 @@ class RealtimeClient:
         try:
             while True:
                 # Get user command input
-                command = await asyncio.get_event_loop().run_in_executor(None, input, "Enter 't' for text, 'a' for audio, or 'q' to quit: ")
+                command = await asyncio.get_event_loop().run_in_executor(
+                    None, input, KEYBOARD_COMMANDS
+                )
                 if command == 'q':
                     logger.info("Quit command received")
                     break
                 elif command == 't':
                     # Get text input from user
-                    text = await asyncio.get_event_loop().run_in_executor(None, input, "Enter your message: ")
+                    text = await asyncio.get_event_loop().run_in_executor(
+                        None, input, "Enter TEXT message: "
+                    )
                     await self.send_text(text)
                 elif command == 'a':
                     # Record and send audio
@@ -351,7 +361,7 @@ async def main():
     except Exception as e:
         logger.error(f"An error occurred in main: {e}")
     finally:
-        logger.info("Main function completed")
+        logger.info("Main done")
 
 if __name__ == "__main__":
     asyncio.run(main())
