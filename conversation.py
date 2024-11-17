@@ -18,7 +18,7 @@ TOPIC = "PARIS"
 INSTRUCTIONS = f"""
 You are Jojo, an experienced, friendly English teacher. Have a conversation with your student about {TOPIC}.
 Adapt your speech to their proficiency level. If you detect that the student is a beginner, speak slowly enunciating every word properly, use vocabulary and sentence structure appropriate for beginners. If you detect that the student is more advanced, you can gradually introduce more complex vocabulary, idiomatic expressions and sentence structure. At all times, ensure the student can follow the conversation and is comfortable.
-Only speak one sentence or question per turn.
+The maximum number of words you can say per turn is 6.
 When you see the prompt 'START', you start the conversation.
 """
 
@@ -97,6 +97,7 @@ class AudioHandler:
             stream.stop_stream()
             stream.close()
 
+        logger.debug("Playing audio")
         # Use a separate thread for playback to avoid blocking
         playback_thread = threading.Thread(target=play)
         playback_thread.start()
@@ -109,23 +110,27 @@ class RealtimeClient:
     def __init__(self, instructions, voice="alloy"):
         # WebSocket Configuration
         self.url = "wss://api.openai.com/v1/realtime"  # WebSocket URL for OpenAI API
-        self.model = "gpt-4o-realtime-preview"  # Model identifier
-        self.api_key = os.getenv("OPENAI_API_KEY")  # API key from environment variable
+        self.model = "gpt-4o-realtime-preview"
+        self.api_key = os.getenv("OPENAI_API_KEY")
         self.ws = None
         self.audio_handler = AudioHandler()
+        
+        # SSL Configuration (skipping certificate verification)
         self.ssl_context = ssl.create_default_context()
         self.ssl_context.check_hostname = False
         self.ssl_context.verify_mode = ssl.CERT_NONE
+        
         self.audio_buffer = b''  # Buffer for streaming audio responses
         self.instructions = instructions
         self.voice = voice
 
-        # VAD mode
-        self.turn_detection_config = {
+        # VAD mode (set to null to disable)
+        self.VAD_turn_detection = True
+        self.VAD_config = {
             "type": "server_vad",
-            "threshold": 0.5,
-            "prefix_padding_ms": 100,
-            "silence_duration_ms": 600
+            "threshold": 0.5,  # Activation threshold (0.0-1.0). A higher threshold will require louder audio to activate the model.
+            "prefix_padding_ms": 300,  # Audio to include before the VAD detected speech.
+            "silence_duration_ms": 600  # Silence to detect speech stop. With lower values the model will respond more quickly.
         }
 
     async def connect(self):
@@ -153,7 +158,11 @@ class RealtimeClient:
             "voice": self.voice,
             "input_audio_format": "pcm16",
             "output_audio_format": "pcm16",
-            "turn_detection": self.turn_detection_config
+            "turn_detection": self.VAD_config if self.VAD_turn_detection else None,
+            "input_audio_transcription": {
+                "model": "whisper-1"
+            },
+            "temperature": 0.6
         })
         logger.info("Session updated.")
         logger.info(f"Instructions: {self.instructions}")
@@ -175,9 +184,8 @@ class RealtimeClient:
         
         :param event: Event data to send.
         """
-        logger.debug(f"Sending event type: {event['type']}")
         await self.ws.send(json.dumps(event))
-        logger.debug("Event sent successfully")
+        logger.debug(f"Event sent - type: {event['type']}")
 
     async def receive_events(self):
         """
@@ -215,7 +223,7 @@ class RealtimeClient:
             # Play the complete audio response
             if self.audio_buffer:
                 self.audio_handler.play_audio(self.audio_buffer)
-                logger.info("Playing audio response")
+                logger.info("Done playing audio response")
                 self.audio_buffer = b''
             else:
                 logger.warning("No audio data to play")
@@ -239,13 +247,14 @@ class RealtimeClient:
             }
         }
         await self.send_event(event)
-        logger.debug("Text message sent, creating response")
         await self.send_event({"type": "response.create"})
+        logger.debug(f"Sent text: {text}")
 
     async def send_audio(self):
         """
         Record and send audio using server-side turn detection
         """
+        logger.debug("Starting audio recording for user input")
         self.audio_handler.start_recording()
         
         try:
@@ -265,9 +274,20 @@ class RealtimeClient:
         except Exception as e:
             logger.error(f"Error during audio recording: {e}")
             self.audio_handler.stop_recording()
+            logger.debug("Audio recording stopped")
+    
+        finally:
+            # Stop recording even if an exception occurs
+            self.audio_handler.stop_recording()
+            logger.debug("Audio recording stopped")
         
-        await self.send_event({"type": "input_audio_buffer.commit"})
-        await self.send_event({"type": "response.create"})
+        # Commit the audio buffer
+        if not self.VAD_turn_detection:
+            await self.send_event({"type": "input_audio_buffer.commit"})
+            logger.debug("Audio buffer committed")
+        
+        # When in Server VAD mode, the client does not need to send this event, the server will commit the audio buffer automatically.
+        # https://platform.openai.com/docs/api-reference/realtime-client-events/input_audio_buffer/commit
 
     async def run(self):
         """
@@ -314,7 +334,7 @@ async def main():
 
     client = RealtimeClient(
         instructions=INSTRUCTIONS,
-        voice="alloy"
+        voice="ash"
     )
     try:
         await client.run()
