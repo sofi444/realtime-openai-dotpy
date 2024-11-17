@@ -16,10 +16,8 @@ logger = logging.getLogger(__name__)
 
 TOPIC = "PARIS"
 INSTRUCTIONS = f"""
-You are Jojo, an experienced, friendly English teacher. Have a conversation with your student about {TOPIC}.
-Adapt your speech to their proficiency level. If you detect that the student is a beginner, speak slowly enunciating every word properly, use vocabulary and sentence structure appropriate for beginners. If you detect that the student is more advanced, you can gradually introduce more complex vocabulary, idiomatic expressions and sentence structure. At all times, ensure the student can follow the conversation and is comfortable.
-The maximum number of words you can say per turn is 6.
-When you see the prompt 'START', you start the conversation.
+You are Martin, an experienced, friendly English teacher. Have a conversation with your student about {TOPIC}. You should be the one to start the conversation. When the student responds, you should respond back. Keep your turns extremely concise, no more than 10 words.
+Adapt your speech to the student's proficiency level. If you detect that the student is a beginner, speak slowly, enunciating every word properly, and use vocabulary and sentence structures appropriate for beginners. If you detect that the student is more advanced, you can gradually introduce more complex vocabulary, idiomatic expressions, and sentence structures. At all times, ensure the student can follow the conversation and is comfortable.
 """
 
 class AudioHandler:
@@ -110,7 +108,7 @@ class RealtimeClient:
     def __init__(self, instructions, voice="alloy"):
         # WebSocket Configuration
         self.url = "wss://api.openai.com/v1/realtime"  # WebSocket URL for OpenAI API
-        self.model = "gpt-4o-realtime-preview"
+        self.model = "gpt-4o-realtime-preview-2024-10-01"
         self.api_key = os.getenv("OPENAI_API_KEY")
         self.ws = None
         self.audio_handler = AudioHandler()
@@ -167,6 +165,10 @@ class RealtimeClient:
         logger.info("Session updated.")
         logger.info(f"Instructions: {self.instructions}")
         logger.info(f"Voice: {self.voice}")
+
+        # Send a response.create event to initiate the conversation
+        await self.send_event({"type": "response.create"})
+        logger.debug("Sent response.create to initiate conversation")
 
     async def update_session(self, config):
         """
@@ -227,6 +229,17 @@ class RealtimeClient:
                 self.audio_buffer = b''
             else:
                 logger.warning("No audio data to play")
+        elif event_type == "response.done":
+            logger.debug("Response generation completed")
+            # Handle any cleanup if necessary
+        elif event_type == "conversation.item.created":
+            logger.debug(f"Conversation item created: {event.get('item')}")
+        elif event_type == "input_audio_buffer.speech_started":
+            logger.debug("Speech started detected by server VAD")
+        elif event_type == "input_audio_buffer.speech_stopped":
+            logger.debug("Speech stopped detected by server VAD")
+        else:
+            logger.debug(f"Unhandled event type: {event_type}")
 
     async def send_text(self, text):
         """
@@ -281,7 +294,7 @@ class RealtimeClient:
             self.audio_handler.stop_recording()
             logger.debug("Audio recording stopped")
         
-        # Commit the audio buffer
+        # Commit the audio buffer if VAD is disabled
         if not self.VAD_turn_detection:
             await self.send_event({"type": "input_audio_buffer.commit"})
             logger.debug("Audio buffer committed")
@@ -297,9 +310,6 @@ class RealtimeClient:
         
         # Continuously listen to events in the background
         receive_task = asyncio.create_task(self.receive_events())
-        
-        # Fake first user message (not played)
-        await self.send_text("START")
 
         try:
             while True:
