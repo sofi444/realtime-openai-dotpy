@@ -15,10 +15,9 @@ load_dotenv()
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-TOPIC = "PARIS"
+TOPIC = "PYTHON"
 INSTRUCTIONS = f"""
-You are Martin, an experienced, friendly English teacher. Have a conversation with your student about {TOPIC}. You should be the one to start the conversation. When the student responds, you should respond back. Keep your turns extremely concise, no more than 10 words.
-Adapt your speech to the student's proficiency level. If you detect that the student is a beginner, speak slowly, enunciating every word properly, and use vocabulary and sentence structures appropriate for beginners. If you detect that the student is more advanced, you can gradually introduce more complex vocabulary, idiomatic expressions, and sentence structures. At all times, ensure the student can follow the conversation and is comfortable.
+You are Martin, a friendly and witty English man. Have a conversation with the user about {TOPIC}. You should be the one to start the conversation. Keep your turns concise.
 """
 KEYBOARD_COMMANDS = """
 q: Quit
